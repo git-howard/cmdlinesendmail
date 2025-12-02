@@ -4,12 +4,12 @@
 # 使用方法: ./send_email.sh -t "收件人1,收件人2" -f "附件1,附件2" -s "邮件主题" -b "邮件正文"
 
 # 默认配置文件路径
-CONFIG_FILE="./email_config.conf"
+CONFIG_FILE="./send_email.ini"
 
 # 加载配置文件
 if [ ! -f "$CONFIG_FILE" ]; then
   echo "错误: 配置文件 $CONFIG_FILE 不存在"
-  echo "请先创建配置文件，可参考email_config.example"
+  echo "请先创建配置文件，可参考send_email.ini.example"
   exit 1
 fi
 

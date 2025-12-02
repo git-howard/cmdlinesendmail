@@ -303,6 +303,7 @@ void show_help(const char* program_name) {
     std::cout << "  -m  邮件正文（可选）\n";
     std::cout << "  -f  附件路径（多个附件用逗号分隔，可选）\n";
     std::cout << "  -h  显示帮助信息\n";
+    std::cout << "\n作者: https://github.com/git-howard/\n";
 }
 
 int main(int argc, char* argv[]) {
@@ -327,16 +328,17 @@ int main(int argc, char* argv[]) {
     }
 #endif
 
+    // Determine config file path based on executable location
+    fs::path exe_dir = get_executable_dir();
+    fs::path config_path = exe_dir / "send_email.ini";
+
+    // Load config first (creates template if missing)
+    Config config = load_config(config_path);
+
     if (args.size() <= 1) {
         show_help(args[0].c_str());
         return 0;
     }
-
-    // Determine config file path based on executable location
-    fs::path exe_dir = get_executable_dir();
-    fs::path config_path = exe_dir / "email_config.conf";
-
-    Config config = load_config(config_path);
 
     Email email;
     email.to_emails = config.default_to_emails;
