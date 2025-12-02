@@ -120,11 +120,64 @@ std::string base64_encode(unsigned char const* bytes_to_encode, unsigned int in_
 
 // --- Logic ---
 
+void create_template_config(const std::string& filename) {
+    std::ofstream ofs(filename);
+    if (!ofs) {
+        std::cerr << "错误: 无法创建配置文件模板 " << filename << std::endl;
+        exit(1);
+    }
+    ofs << "# SMTP服务器配置\n"
+        << "# 请根据实际情况修改以下配置\n\n"
+        << "# SMTP服务器地址\n"
+        << "SMTP_SERVER=smtp.example.com\n\n"
+        << "# SMTP服务器端口\n"
+        << "SMTP_PORT=465\n\n"
+        << "# SMTP加密方式（可选值：none、ssl、tls）\n"
+        << "# none: 不使用加密\n"
+        << "# ssl: 使用SMTPS加密（通常使用端口465）\n"
+        << "# tls: 使用STARTTLS加密（通常使用端口587）\n"
+        << "# 注意：如果未指定，将根据端口自动选择加密方式\n"
+        << "SMTP_ENCRYPTION=ssl\n\n"
+        << "# SMTP认证用户名\n"
+        << "SMTP_USER=user@example.com\n\n"
+        << "# SMTP认证密码\n"
+        << "SMTP_PASS=password\n\n"
+        << "# 发件人地址\n"
+        << "# 注意：SMTP服务器要求发件人地址必须与授权用户(SMTP_USER)相同\n"
+        << "SENDER=\"user@example.com\"\n\n"
+        << "# 发件人名称（可选）\n"
+        << "# 如果设置，邮件显示为：发件人名称<发件人地址>\n"
+        << "SENDER_NAME=\"Sender Name\"\n\n"
+        << "# 默认邮件配置\n"
+        << "# 以下配置项可以在命令行参数中被覆盖\n"
+        << "# 默认收件人（多个收件人用逗号分隔）\n"
+        << "DEFAULT_TO_EMAILS=\"\"\n"
+        << "# 默认抄送（多个收件人用逗号分隔）\n"
+        << "DEFAULT_CC_EMAILS=\"\"\n"
+        << "# 默认密送（多个收件人用逗号分隔）\n"
+        << "DEFAULT_BCC_EMAILS=\"\"\n"
+        << "# 默认邮件主题\n"
+        << "DEFAULT_SUBJECT=\"测试邮件\"\n"
+        << "# 默认邮件正文\n"
+        << "DEFAULT_BODY=\"这是一封测试邮件。\"\n"
+        << "# 默认附件（多个附件用逗号分隔）\n"
+        << "DEFAULT_ATTACHMENTS=\"\"\n";
+    
+    std::cout << "配置文件 " << filename << " 不存在，已自动创建模板。\n"
+              << "请修改配置后重试。" << std::endl;
+}
+
 Config load_config(const std::string& filename) {
     Config config;
+    
+    if (!fs::exists(filename)) {
+        create_template_config(filename);
+        exit(0);
+    }
+
     std::ifstream file(filename);
     if (!file.is_open()) {
-        std::cerr << "错误: 配置文件 " << filename << " 不存在" << std::endl;
+        std::cerr << "错误: 无法读取配置文件 " << filename << std::endl;
         exit(1);
     }
 
@@ -173,14 +226,25 @@ std::vector<std::string> split(const std::string& s, char delimiter) {
 }
 
 void show_help(const char* program_name) {
-    std::cout << "用法: " << program_name << " -t \"收件人1,收件人2\" -f \"附件1,附件2\" -s \"主题\" -b \"正文/密送\" -c \"抄送\"" << std::endl;
-    std::cout << "注意：根据原始脚本行为，-b 参数被解析为密送(BCC)。但为了兼容性，如果未指定-m(message)，且-b内容看起来不像邮箱，可能会引起混淆。" << std::endl;
-    std::cout << "建议使用 -m 指定正文，-b 指定密送。" << std::endl;
+    std::cout << "用法: " << program_name << " -t \"收件人1,收件人2\" -f \"附件1,附件2\" -s \"主题\" -m \"正文\" -c \"抄送\"" << std::endl;
+    std::cout << "\n参数说明:\n";
+    std::cout << "  -t  收件人地址（多个收件人用逗号分隔，必填）\n";
+    std::cout << "  -c  抄送地址（多个抄送地址用逗号分隔，可选）\n";
+    std::cout << "  -b  密送地址（多个密送地址用逗号分隔，可选）\n";
+    std::cout << "  -s  邮件主题（可选）\n";
+    std::cout << "  -m  邮件正文（可选）\n";
+    std::cout << "  -f  附件路径（多个附件用逗号分隔，可选）\n";
+    std::cout << "  -h  显示帮助信息\n";
 }
 
 int main(int argc, char* argv[]) {
     // Set code page to UTF-8 for console output
     system("chcp 65001 > nul");
+
+    if (argc == 1) {
+        show_help(argv[0]);
+        return 0;
+    }
 
     Config config = load_config("email_config.conf");
 
@@ -195,7 +259,6 @@ int main(int argc, char* argv[]) {
     }
 
     // Argument parsing
-    // We use a simple loop because Windows doesn't guarantee getopt
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "-h" || arg == "--help") {
@@ -208,7 +271,6 @@ int main(int argc, char* argv[]) {
             } else if (arg == "-c") {
                 email.cc_emails = argv[++i];
             } else if (arg == "-b") {
-                // Following script logic: -b is BCC
                 email.bcc_emails = argv[++i];
             } else if (arg == "-s") {
                 email.subject = argv[++i];
@@ -216,7 +278,6 @@ int main(int argc, char* argv[]) {
                 std::string attach_str = argv[++i];
                 email.attachments = split(attach_str, ',');
             } else if (arg == "-m") {
-                // Extra option for Body to fix script limitation
                 email.body = argv[++i];
             }
         }
@@ -228,7 +289,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     if (config.smtp_server.empty() || config.smtp_port.empty() || config.smtp_user.empty() || config.smtp_pass.empty() || config.sender.empty()) {
-        std::cerr << "错误: 配置文件缺少必要的配置项" << std::endl;
+        std::cerr << "错误: 配置文件缺少必要的配置项 (SMTP_SERVER, SMTP_PORT, SMTP_USER, SMTP_PASS, SENDER)" << std::endl;
         return 1;
     }
 
@@ -290,8 +351,6 @@ int main(int argc, char* argv[]) {
             std::vector<unsigned char> buffer(std::istreambuf_iterator<char>(ifs), {});
             std::string encoded = base64_encode(buffer.data(), buffer.size());
             
-            // Split base64 into lines (76 chars max recommended, but curl handles it usually, 
-            // strictly MIME says 76. Let's wrap it to be safe)
             for (size_t i = 0; i < encoded.length(); i += 76) {
                 ofs << encoded.substr(i, 76) << "\r\n";
             }
@@ -309,7 +368,7 @@ int main(int argc, char* argv[]) {
     std::cout << "正在发送邮件..." << std::endl;
     std::cout << "使用" << config.smtp_encryption << "加密方式连接到" << config.smtp_server << ":" << config.smtp_port << std::endl;
 
-    std::string curl_cmd = "curl.exe -v"; // Use curl.exe explicitly
+    std::string curl_cmd = "curl.exe -v";
     if (config.smtp_encryption == "ssl") {
         curl_cmd += " --ssl-reqd --url \"smtps://" + config.smtp_server + ":" + config.smtp_port + "\"";
     } else if (config.smtp_encryption == "tls") {
@@ -320,40 +379,18 @@ int main(int argc, char* argv[]) {
 
     curl_cmd += " --mail-from \"" + config.sender + "\"";
     
-    // Split recipients for --mail-rcpt
-    // Note: curl needs --mail-rcpt for EACH recipient.
-    // The original script does --mail-rcpt "$TO_EMAILS". 
-    // If TO_EMAILS contains commas, curl might not handle it correctly in one go?
-    // Wait, curl man page says: "Specify multiple recipients by using --mail-rcpt multiple times"
-    // BUT, the script does: --mail-rcpt "$TO_EMAILS" where TO_EMAILS is comma separated.
-    // Some SMTP servers accept comma separated list in RCPT TO? No, usually not.
-    // Let's check if curl supports comma separated list. 
-    // Actually, the script passes it as a single string. If it works for the user, maybe curl splits it?
-    // Or maybe the user's script is flawed there too.
-    // To be safe, I should split them.
-    
     std::vector<std::string> all_rcpts = split(email.to_emails, ',');
     std::vector<std::string> ccs = split(email.cc_emails, ',');
     std::vector<std::string> bccs = split(email.bcc_emails, ',');
     all_rcpts.insert(all_rcpts.end(), ccs.begin(), ccs.end());
     all_rcpts.insert(all_rcpts.end(), bccs.begin(), bccs.end());
 
-    // To be safe and correct (better than script), let's pass each recipient.
-    // But if I want to match script *exactly*, I should do what it does.
-    // Script: --mail-rcpt "$TO_EMAILS"
-    // If TO_EMAILS is "a@b.com,c@d.com", this passes one argument.
-    // Does curl handle that?
-    // Tested: `curl --mail-rcpt "a@b.com,c@d.com"` usually fails with "555 5.5.2 Syntax error".
-    // So the script might be buggy for multiple recipients too!
-    // I will fix this by iterating.
     for (const auto& rcpt : all_rcpts) {
         curl_cmd += " --mail-rcpt \"" + rcpt + "\"";
     }
 
     curl_cmd += " --user \"" + config.smtp_user + ":" + config.smtp_pass + "\"";
     curl_cmd += " --upload-file \"" + tmp_file + "\"";
-
-    // std::cout << "DEBUG: " << curl_cmd << std::endl;
 
     int ret = system(curl_cmd.c_str());
 
