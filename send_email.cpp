@@ -11,6 +11,14 @@
 #include <random>
 #include <iomanip>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <shellapi.h>
+#else
+#include <unistd.h>
+#include <limits.h>
+#endif
+
 namespace fs = std::filesystem;
 
 // --- Configuration and Globals ---
@@ -43,6 +51,66 @@ struct Email {
 };
 
 // --- Helper Functions ---
+
+// Convert wstring to utf-8 string
+std::string wstring_to_utf8(const std::wstring& wstr) {
+    if (wstr.empty()) return std::string();
+    int size_needed = WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), NULL, 0, NULL, NULL);
+    std::string strTo(size_needed, 0);
+    WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &strTo[0], size_needed, NULL, NULL);
+    return strTo;
+}
+
+// Get executable directory
+fs::path get_executable_dir() {
+#ifdef _WIN32
+    wchar_t buffer[MAX_PATH];
+    GetModuleFileNameW(NULL, buffer, MAX_PATH);
+    return fs::path(buffer).parent_path();
+#else
+    char result[PATH_MAX];
+    ssize_t count = readlink("/proc/self/exe", result, PATH_MAX);
+    std::string full_path(result, (count > 0) ? count : 0);
+    return fs::path(full_path).parent_path();
+#endif
+}
+
+// Get current datetime string
+std::string get_current_datetime() {
+    auto now = std::chrono::system_clock::now();
+    auto in_time_t = std::chrono::system_clock::to_time_t(now);
+
+    std::stringstream ss;
+    ss << std::put_time(std::localtime(&in_time_t), "%Y-%m-%d %H:%M:%S");
+    return ss.str();
+}
+
+// Write to log file
+void write_log(const std::string& sender, const Email& email, bool success) {
+    fs::path exe_dir = get_executable_dir();
+    fs::path log_path = exe_dir / "send_email.log";
+    
+    std::ofstream log_file(log_path, std::ios::app);
+    if (log_file.is_open()) {
+        std::string attach_str;
+        for (size_t i = 0; i < email.attachments.size(); ++i) {
+            // Only log the filename, not full path, to keep it clean
+            attach_str += fs::path(email.attachments[i]).filename().string();
+            if (i < email.attachments.size() - 1) attach_str += ", ";
+        }
+        if (attach_str.empty()) attach_str = "None";
+
+        log_file << "[" << get_current_datetime() << "] "
+                 << "Sender: " << sender << ", "
+                 << "To: [" << email.to_emails << "], "
+                 << "Cc: [" << email.cc_emails << "], "
+                 << "Bcc: [" << email.bcc_emails << "], "
+                 << "Subject: \"" << email.subject << "\", "
+                 << "Attachments: [" << attach_str << "], "
+                 << "Status: " << (success ? "Success" : "Failed")
+                 << std::endl;
+    }
+}
 
 // Trim string
 std::string trim(const std::string& str) {
@@ -120,10 +188,10 @@ std::string base64_encode(unsigned char const* bytes_to_encode, unsigned int in_
 
 // --- Logic ---
 
-void create_template_config(const std::string& filename) {
+void create_template_config(const fs::path& filename) {
     std::ofstream ofs(filename);
     if (!ofs) {
-        std::cerr << "错误: 无法创建配置文件模板 " << filename << std::endl;
+        std::cerr << "错误: 无法创建配置文件模板 " << filename.string() << std::endl;
         exit(1);
     }
     ofs << "# SMTP服务器配置\n"
@@ -163,11 +231,11 @@ void create_template_config(const std::string& filename) {
         << "# 默认附件（多个附件用逗号分隔）\n"
         << "DEFAULT_ATTACHMENTS=\"\"\n";
     
-    std::cout << "配置文件 " << filename << " 不存在，已自动创建模板。\n"
+    std::cout << "配置文件 " << filename.string() << " 不存在，已自动创建模板。\n"
               << "请修改配置后重试。" << std::endl;
 }
 
-Config load_config(const std::string& filename) {
+Config load_config(const fs::path& filename) {
     Config config;
     
     if (!fs::exists(filename)) {
@@ -177,7 +245,7 @@ Config load_config(const std::string& filename) {
 
     std::ifstream file(filename);
     if (!file.is_open()) {
-        std::cerr << "错误: 无法读取配置文件 " << filename << std::endl;
+        std::cerr << "错误: 无法读取配置文件 " << filename.string() << std::endl;
         exit(1);
     }
 
@@ -241,12 +309,34 @@ int main(int argc, char* argv[]) {
     // Set code page to UTF-8 for console output
     system("chcp 65001 > nul");
 
-    if (argc == 1) {
-        show_help(argv[0]);
+    std::vector<std::string> args;
+#ifdef _WIN32
+    int argc_w = 0;
+    LPWSTR* argv_w = CommandLineToArgvW(GetCommandLineW(), &argc_w);
+    if (argv_w == NULL) {
+        std::cerr << "Error parsing command line arguments" << std::endl;
+        return 1;
+    }
+    for (int i = 0; i < argc_w; ++i) {
+        args.push_back(wstring_to_utf8(argv_w[i]));
+    }
+    LocalFree(argv_w);
+#else
+    for (int i = 0; i < argc; ++i) {
+        args.push_back(argv[i]);
+    }
+#endif
+
+    if (args.size() <= 1) {
+        show_help(args[0].c_str());
         return 0;
     }
 
-    Config config = load_config("email_config.conf");
+    // Determine config file path based on executable location
+    fs::path exe_dir = get_executable_dir();
+    fs::path config_path = exe_dir / "email_config.conf";
+
+    Config config = load_config(config_path);
 
     Email email;
     email.to_emails = config.default_to_emails;
@@ -259,26 +349,26 @@ int main(int argc, char* argv[]) {
     }
 
     // Argument parsing
-    for (int i = 1; i < argc; ++i) {
-        std::string arg = argv[i];
+    for (size_t i = 1; i < args.size(); ++i) {
+        std::string arg = args[i];
         if (arg == "-h" || arg == "--help") {
-            show_help(argv[0]);
+            show_help(args[0].c_str());
             return 0;
         }
-        if (i + 1 < argc) {
+        if (i + 1 < args.size()) {
             if (arg == "-t") {
-                email.to_emails = argv[++i];
+                email.to_emails = args[++i];
             } else if (arg == "-c") {
-                email.cc_emails = argv[++i];
+                email.cc_emails = args[++i];
             } else if (arg == "-b") {
-                email.bcc_emails = argv[++i];
+                email.bcc_emails = args[++i];
             } else if (arg == "-s") {
-                email.subject = argv[++i];
+                email.subject = args[++i];
             } else if (arg == "-f") {
-                std::string attach_str = argv[++i];
+                std::string attach_str = args[++i];
                 email.attachments = split(attach_str, ',');
             } else if (arg == "-m") {
-                email.body = argv[++i];
+                email.body = args[++i];
             }
         }
     }
@@ -397,7 +487,11 @@ int main(int argc, char* argv[]) {
     // Cleanup
     fs::remove(tmp_file);
 
-    if (ret == 0) {
+    // Log the result
+    bool success = (ret == 0);
+    write_log(config.sender, email, success);
+
+    if (success) {
         std::cout << "邮件发送成功" << std::endl;
         return 0;
     } else {
